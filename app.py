@@ -4,7 +4,6 @@ import streamlit as st
 
 
 load_dotenv()
-# Check if the API key is set
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     st.error("OpenAI API key is not set. Please set the OPENAI_API_KEY environment variable.")
