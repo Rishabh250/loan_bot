@@ -1,4 +1,16 @@
+import os
+from dotenv import load_dotenv
 import streamlit as st
+
+
+load_dotenv()
+# Check if the API key is set
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    st.error("OpenAI API key is not set. Please set the OPENAI_API_KEY environment variable.")
+    st.stop()
+
+os.environ["OPENAI_API_KEY"] = api_key
 from langchain.agents import Tool, AgentExecutor, LLMSingleActionAgent, AgentOutputParser
 from langchain.prompts import StringPromptTemplate
 from langchain.chat_models import ChatOpenAI
@@ -6,10 +18,7 @@ from langchain.chains import LLMChain
 from langchain.schema import AgentAction, AgentFinish
 from typing import Union
 import re
-import os
 import json
-
-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 
 class LoanDatabase:
     def __init__(self):
