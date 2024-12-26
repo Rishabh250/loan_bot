@@ -15,7 +15,6 @@ Key Features:
 - Asynchronous processing using thread pools
 """
 import os
-import json
 from http import HTTPStatus
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, Tuple
@@ -173,7 +172,7 @@ def handle_chat_request(data: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
     if not response:
         try:
             future = executor.submit(
-                counselor.get_loan_recommendation,
+                # counselor.get_loan_recommendation,
                 student_details,
                 message,
                 user_id

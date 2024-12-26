@@ -15,16 +15,16 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 from functools import lru_cache
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.memory import ConversationBufferMemory
 from langchain_core.prompts import PromptTemplate
 from langsmith import traceable
 from helpers import format_lenders_data
 from prompts import QUERY_RECOMMENDATION_PROMPT, INITIAL_PROMPT
 from utils.constant import LENDER_DATA
-from vector_store.loan_recommendations import LoanRecommendationStore
-from vector_store.lender_store import LenderStore
-from vector_store.conversation_store import ConversationStore
+# from vector_store.loan_recommendations import LoanRecommendationStore
+# from vector_store.lender_store import LenderStore
+# from vector_store.conversation_store import ConversationStore
 
 load_dotenv()
 
@@ -62,20 +62,21 @@ class LoanCounselorAgent:
         """
         self.lenders = self.load_lenders()
         self.llm = self._initialize_llm(
-            model or os.getenv("OPENAI_MODEL"),
-            api_key or os.getenv("OPENAI_API_KEY"), 
-            temperature
+            model=os.getenv("GOOGLE_GENAI_MODEL"),
+            api_key=os.getenv("GOOGLE_GENAI_API_KEY"), 
+            temperature=temperature
         )
         self.memory: Dict[str, ConversationBufferMemory] = {}
         self.prompt_template = self._initialize_prompt_template()
-        self.recommendation_store = LoanRecommendationStore()
-        self.lender_store = LenderStore()
-        self.lender_store.index_lenders(self.lenders)
-        self.conversation_store = ConversationStore()
+        self.recommendation_store = None
+        # self.recommendation_store = LoanRecommendationStore()
+        # self.lender_store = LenderStore()
+        # self.lender_store.index_lenders(self.lenders)
+        # self.conversation_store = ConversationStore()
         self.executor = ThreadPoolExecutor(max_workers=4)
 
     @staticmethod
-    def _initialize_llm(model: str, api_key: str, temperature: float) -> ChatOpenAI:
+    def _initialize_llm(model: str, api_key: str, temperature: float) -> ChatGoogleGenerativeAI:
         """
         Initialize the AI language model.
 
@@ -92,10 +93,10 @@ class LoanCounselorAgent:
         """
         if not model or not api_key:
             raise ValueError("Model and API key must be provided")
-        return ChatOpenAI(
-            model=model,
+        return ChatGoogleGenerativeAI(
+            model=os.getenv("GOOGLE_GENAI_MODEL"),
             temperature=temperature,
-            api_key=api_key
+            api_key=os.getenv("GOOGLE_GENAI_API_KEY")
         )
 
     def get_user_memory(self, user_id: str) -> ConversationBufferMemory:
@@ -172,14 +173,14 @@ class LoanCounselorAgent:
         """
         # Get recommendations, lenders and format data in parallel
         futures = {
-            'similar_recs': self.executor.submit(
-                self.recommendation_store.find_similar_recommendations,
-                student_details
-            ),
-            'matching_lenders': self.executor.submit(
-                self.lender_store.search_lenders,
-                f"{student_details['destination_country']} {student_details['loan_amount_needed']}"
-            ),
+            # 'similar_recs': self.executor.submit(
+            #     self.recommendation_store.find_similar_recommendations,
+            #     student_details
+            # ),    
+            # 'matching_lenders': self.executor.submit(
+            #     self.lender_store.search_lenders,
+            #     f"{student_details['destination_country']} {student_details['loan_amount_needed']}"
+            # ),
             'formatted_lenders': self.executor.submit(format_lenders_data, self.lenders),
             'formatted_student': self.executor.submit(json.dumps, student_details, indent=2)
         }
@@ -194,8 +195,8 @@ class LoanCounselorAgent:
         return {
             'lenders_data': futures['formatted_lenders'].result(),
             'student_details': futures['formatted_student'].result(),
-            'similar_cases': str(futures['similar_recs'].result()),
-            'matching_lenders': str(futures['matching_lenders'].result()),
+            # 'similar_cases': str(futures['similar_recs'].result()),
+            # 'matching_lenders': str(futures['matching_lenders'].result()),
             'student_message': student_message,
             'conversation_history': "\n".join(conversation_summary)
         }
@@ -250,12 +251,12 @@ class LoanCounselorAgent:
                 {"input": student_message},
                 {"output": response}
             )
-            self.executor.submit(
-                self.recommendation_store.store_recommendation,
-                student_details=student_details,
-                recommendation=response,
-                metadata={'user_id': user_id}
-            )
+            # self.executor.submit(
+            #     self.recommendation_store.store_recommendation,
+            #     student_details=student_details,
+            #     recommendation=response,
+            #     metadata={'user_id': user_id}
+            # )
 
             return {
                 'response': response,

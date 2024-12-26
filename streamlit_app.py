@@ -81,6 +81,7 @@ with col2:
                     response.raise_for_status()
 
                     data = response.json()
+                    print(data)
                     if 'response' in data:
                         st.markdown("### 🤖 AI Response:")
                         # Create the big box for the response
