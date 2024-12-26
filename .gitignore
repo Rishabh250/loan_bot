@@ -1,3 +1,4 @@
-env
-__pycache__/
-*.pyc
+/.env
+/Pipfile
+/__pycache__
+/vector_db

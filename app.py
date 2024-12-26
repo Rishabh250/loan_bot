@@ -1,423 +1,269 @@
+"""
+This is the main application file for the loan counselor agent.
+
+This application provides a Flask-based REST API for a loan counseling chatbot
+that helps students understand their loan options. It handles user conversations,
+validates requests, and provides loan recommendations through an AI-powered
+counselor agent.
+
+Key Features:
+- Chat endpoint for conversing with the loan counselor
+- Request validation for required student information
+- Conversation memory management
+- Error handling and logging
+- CORS support for cross-origin requests
+- Asynchronous processing using thread pools
+"""
 import os
-from dotenv import load_dotenv
-import streamlit as st
-
-
-load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    st.error("OpenAI API key is not set. Please set the OPENAI_API_KEY environment variable.")
-    st.stop()
-
-os.environ["OPENAI_API_KEY"] = api_key
-from langchain.agents import Tool, AgentExecutor, LLMSingleActionAgent, AgentOutputParser
-from langchain.prompts import StringPromptTemplate
-from langchain.chat_models import ChatOpenAI
-from langchain.chains import LLMChain
-from langchain.schema import AgentAction, AgentFinish
-from typing import Union
-import re
 import json
+from http import HTTPStatus
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Any, Tuple
+try:
+    from dotenv import load_dotenv
+    from flask import Flask, request, jsonify, Response
+    from langsmith import traceable
+    from flask_cors import CORS
+except ImportError as e:
+    print(f"Error importing required packages: {e}")
+    print("Please install required packages: pip install python-dotenv flask langsmith flask-cors")
+    raise
 
-class LoanDatabase:
-    def __init__(self):
-        self.lenders = [
-            {
-                "name": "HDFC Credila",
-                "interest_rate": "10.0% - 12.0%",
-                "maximum_amount": "INR 10,000,000",
-                "about": "HDFC Credila is a trusted non-banking financial institution, offering a range of customizable loan options to meet the diverse needs of its customers.",
-                "key_points": [
-                    "Processing fee up to 1% + GST",
-                    "Tenure up to 10 years"
-                ],
-                "currency": "INR",
-                "collateral_required": True,
-                "non_collateral_option": True,
-                "us_cosigner_required": False,
-                "country": "India",
-                "university_country": "Any"
-            },
-            {
-                "name": "IDFC",
-                "interest_rate": "10.15% - 12.0%",
-                "maximum_amount": "INR 10,000,000",
-                "about": "IDFC Bank is here to provide you with flexible loans that suit your requirements.",
-                "key_points": [
-                    "Processing fee up to 1% + GST",
-                    "Tenure up to 12 years"
-                ],
-                "currency": "INR",
-                "collateral_required": True,
-                "non_collateral_option": True,
-                "us_cosigner_required": False,
-                "country": "India",
-                "university_country": "Any"
-            },
-            {
-                "name": "ICICI",
-                "interest_rate": "10.5% - 12.0%",
-                "maximum_amount": "INR 20,000,000",
-                "about": "ICICI is committed to offering loan solutions customized just for you.",
-                "key_points": [
-                    "Processing fee up to 1% + GST",
-                    "Tenure up to 10 years"
-                ],
-                "currency": "INR",
-                "collateral_required": True,
-                "non_collateral_option": True,
-                "us_cosigner_required": False,
-                "country": "India",
-                "university_country": "Any"
-            },
-            {
-                "name": "SBI",
-                "interest_rate": "9.15% - 12.0%",
-                "maximum_amount": "INR 15,000,000",
-                "about": "SBI is here to serve you, with a focus on personalized loan solutions for your educational and career objectives.",
-                "key_points": [
-                    "Processing fee Rs 10,000 + GST",
-                    "Tenure up to 15 years"
-                ],
-                "currency": "INR",
-                "collateral_required": True,
-                "non_collateral_option": False,
-                "us_cosigner_required": False,
-                "country": "India",
-                "university_country": "Any"
-            },
-            {
-                "name": "Union Bank of India",
-                "interest_rate": "9.8% - 12.0%",
-                "maximum_amount": "INR 15,000,000",
-                "about": "UBI is committed to being your guide, creating customized loan solutions for your education and career journey.",
-                "key_points": [
-                    "Processing fee up to Rs 5,000 + GST",
-                    "Tenure up to 15 years"
-                ],
-                "currency": "INR",
-                "collateral_required": True,
-                "non_collateral_option": True,
-                "us_cosigner_required": False,
-                "country": "India",
-                "university_country": "Any"
-            },
-            {
-                "name": "Avanse",
-                "interest_rate": "11.5% - 12.0%",
-                "maximum_amount": "INR 7,500,000",
-                "about": "Avanse is known for its commitment to crafting adjustable loan options.",
-                "key_points": [
-                    "Processing fee up to 1%",
-                    "Tenure up to 15 years"
-                ],
-                "currency": "INR",
-                "collateral_required": True,
-                "non_collateral_option": True,
-                "us_cosigner_required": False,
-                "country": "India",
-                "university_country": "USA, Canada"
-            },
-            {
-                "name": "Auxilo",
-                "interest_rate": "11.25% - 12.0%",
-                "maximum_amount": "INR 7,000,000",
-                "about": "Auxilo Finserve Pvt. Ltd. is a trusted and reliable non-banking financial institution, dedicated to providing education loans to students in need.",
-                "key_points": [
-                    "Processing fee up to 1.5%",
-                    "Tenure up to 10 years"
-                ],
-                "currency": "INR",
-                "collateral_required": True,
-                "non_collateral_option": True,
-                "us_cosigner_required": False,
-                "country": "India",
-                "university_country": "USA, Canada, UK"
-            },
-            {
-                "name": "Sallie Mae",
-                "interest_rate": "4.15% - 15.6%",
-                "maximum_amount": "100% of school-certified expenses (USD)",
-                "about": "Sallie Mae is a 'US-based' powerhouse education solution company offering education financing products and resources to help students in their higher education dream big.",
-                "key_points": [
-                    "No origination fee",
-                    "Tenure varies"
-                ],
-                "currency": "USD",
-                "collateral_required": False,
-                "non_collateral_option": True,
-                "us_cosigner_required": True,
-                "country": "USA",
-                "university_country": "USA"
-            },
-            {
-                "name": "Prodigy",
-                "interest_rate": "13.99% - 12.0%",
-                "maximum_amount": "USD 100,000",
-                "about": "Prodigy is a trusted financial institution, personalized loan solutions.",
-                "key_points": [
-                    "Processing fee up to 5% + GST",
-                    "Tenure up to 10 years"
-                ],
-                "currency": "USD",
-                "collateral_required": False,
-                "non_collateral_option": True,
-                "us_cosigner_required": False,
-                "country": "USA, Canada, UK, Australia, Germany",
-                "university_country": "USA, Canada, UK, Australia, Germany"
-            },
-            {
-                "name": "Tata Capital",
-                "interest_rate": "11.75% - 12.0%",
-                "maximum_amount": "INR 6,500,000",
-                "about": "Tata Capital is a leading financial services provider, offering competitive interest rates and maximum flexibility.",
-                "key_points": [
-                    "Processing fee up to 1.5% + GST",
-                    "Tenure up to 10 years"
-                ],
-                "currency": "INR",
-                "collateral_required": True,
-                "non_collateral_option": True,
-                "us_cosigner_required": False,
-                "country": "India",
-                "university_country": "Any"
-            },
-            {
-                "name": "Axis Bank",
-                "interest_rate": "10.5%",
-                "maximum_amount": "INR 20,000,000",
-                "about": "Finance your studies abroad with Axis Bank's flexible loan amounts, quick disbursals and tax exemptions.",
-                "key_points": [
-                    "Processing fee up to 1% + GST",
-                    "Tenure up to 10 years"
-                ],
-                "currency": "INR",
-                "collateral_required": True,
-                "non_collateral_option": True,
-                "us_cosigner_required": False,
-                "country": "India",
-                "university_country": "Any"
-            },
-            {
-                "name": "Incred",
-                "interest_rate": "11.25%",
-                "maximum_amount": "INR 10,000,000",
-                "about": "Invest in your education without worries, with Incred's wide range of loans covering 100% of your tuition fees*.",
-                "key_points": [
-                    "Processing fee up to 1.5% + GST",
-                    "Tenure up to 12 years"
-                ],
-                "currency": "INR",
-                "collateral_required": True,
-                "non_collateral_option": True,
-                "us_cosigner_required": False,
-                "country": "India",
-                "university_country": "Any"
-            },
-            {
-                "name": "Ascent",
-                "interest_rate": "3.79% - 9.9%",
-                "maximum_amount": "USD 400,000",
-                "about": "Ascent is a trusted financial institution, committed to providing customizable loan solutions.",
-                "key_points": [
-                    "0% processing fee",
-                    "Tenure up to 10 years"
-                ],
-                "currency": "USD",
-                "collateral_required": False,
-                "non_collateral_option": True,
-                "us_cosigner_required": True,
-                "country": "USA",
-                "university_country": "USA"
-            },
-            {
-                "name": "Earnest",
-                "interest_rate": "4.25% - 9.0%",
-                "maximum_amount": "USD 250,000",
-                "about": "Earnest is a renowned US non-banking financial institution that provides flexible and personalized loans.",
-                "key_points": [
-                    "0% processing fee",
-                    "Tenure up to 10 years"
-                ],
-                "currency": "USD",
-                "collateral_required": False,
-                "non_collateral_option": True,
-                "us_cosigner_required": False,
-                "country": "USA",
-                "university_country": "USA"
-            }
-        ]
+from loan_counselor_agent import LoanCounselorAgent
 
-    def get_loan_options(self, details):
-        return json.dumps(self.lenders)
+# Load environment variables and configure app
+def create_app() -> Flask:
+    """
+    Create and configure Flask application with necessary settings.
+    
+    Returns:
+        Flask: Configured Flask application instance
+    """
+    load_dotenv()
 
-loan_db = LoanDatabase()
+    flask_app = Flask(__name__)
+    CORS(flask_app)
 
-tools = [
-    Tool(
-        name="Loan Database",
-        func=loan_db.get_loan_options,
-        description="Retrieves all available loan options."
+    # Get config values from environment with defaults
+    flask_app.config.update(
+        SECRET_KEY=os.getenv('FLASK_SECRET_KEY', 'loan-counselor-agent'),
+        DEBUG=os.getenv('FLASK_DEBUG', 'true').lower() == 'true',
+        ENV=os.getenv('FLASK_ENV', 'development'),
+        HOST=os.getenv('FLASK_HOST', '0.0.0.0'),
+        PORT=int(os.getenv('FLASK_PORT', '8000'))
     )
+
+    return flask_app
+
+# Initialize Flask app and counselor
+app = create_app()
+counselor = LoanCounselorAgent()
+
+# Configure LangChain environment
+def configure_langchain() -> None:
+    """
+    Configure LangChain environment variables for AI model integration.
+    Sets up API keys and tracing settings.
+    """
+    os.environ.update({
+        "LANGCHAIN_API_KEY": os.getenv("LANGCHAIN_API_KEY", ""),
+        "LANGCHAIN_API_KEY": os.getenv("LANGCHAIN_API_KEY", ""),
+        "LANGCHAIN_TRACING_V2": "true",
+        "LANGCHAIN_PROJECT": os.getenv("LANGCHAIN_PROJECT", "loan-counselor-agent")
+    })
+
+configure_langchain()
+
+# Required fields for request validation
+REQUIRED_REQUEST_FIELDS = ['message', 'student_details', 'userId']
+REQUIRED_STUDENT_FIELDS = [
+    'name',
+    'origin_country',
+    'destination_country', 
+    'loan_amount_needed',
+    'course_of_study'
 ]
 
-def format_lenders_data(lenders):
-    formatted_data = []
-    for lender in lenders:
-        lender_info = f"""
-        {lender['name']}: 
-        - Interest Rate: {lender['interest_rate']}
-        - Maximum Amount: {lender['maximum_amount']}
-        - About: {lender['about']}
-        - Key Points: {', '.join(lender['key_points'])}
-        - Currency: {lender['currency']}
-        - Collateral Required: {lender['collateral_required']}
-        - Non-Collateral Option: {lender['non_collateral_option']}
-        - US Cosigner Required: {lender['us_cosigner_required']}
-        - Country: {lender['country']}
-        - University Country: {lender['university_country']}
-        """
-        formatted_data.append(lender_info.strip())
+def validate_request_data(data: Dict[str, Any]) -> Tuple[Dict[str, str], int]:
+    """
+    Validate the incoming request data for required fields and student information.
     
-    return "\n".join(formatted_data)
+    Args:
+        data (Dict[str, Any]): Request data containing message and student details
+        
+    Returns:
+        Tuple[Dict[str, str], int]: Error response and HTTP status code if validation fails,
+                                   empty dict and OK status if validation passes
+    """
+    if not data:
+        return {'error': 'Request body is empty'}, HTTPStatus.BAD_REQUEST
 
-class CounselorPromptTemplate(StringPromptTemplate):
-    template = """You are Sarah, a friendly education loan counselor with 15 years of experience. Your goal is to help students find the best loan options. Respond like a real person in a casual conversation.
+    # Validate required fields
+    missing_fields = [field for field in REQUIRED_REQUEST_FIELDS if field not in data]
+    if missing_fields:
+        return {
+            'error': f'Missing required fields: {", ".join(missing_fields)}'
+        }, HTTPStatus.BAD_REQUEST
 
-IMPORTANT: 
-1. Gather this info naturally:
-   - Full name
-   - Age
-   - Nationality
-   - Current residence
-   - Desired course and university
-   - Estimated education cost
-   - US cosigner availability
-   - Collateral availability
-   - Academic credentials
-   - Work experience
+    # Validate student details
+    student_details = data.get('student_details', {})
+    if not isinstance(student_details, dict):
+        return {'error': 'student_details must be a JSON object'}, HTTPStatus.BAD_REQUEST
+        
+    missing_student_fields = [
+        field for field in REQUIRED_STUDENT_FIELDS
+        if field not in student_details
+    ]
+    if missing_student_fields:
+        return {
+            'error': f'Missing required student details: {", ".join(missing_student_fields)}'
+        }, HTTPStatus.BAD_REQUEST
 
-2. Only suggest loans after gathering all info.
+    return {}, HTTPStatus.OK
 
-3. Use ONLY the Loan Database info. Don't make up details.
+# Initialize thread pool for handling concurrent requests
+executor = ThreadPoolExecutor(max_workers=3)
 
-4. Loan Database fields:
-   - name
-   - interest_rate
-   - maximum_amount
-   - about
-   - key_points
-   - currency
-   - collateral_required
-   - non_collateral_option
-   - us_cosigner_required
-   - country
-   - university_country
-
-Lenders information:
-{lenders_data}
-
-Your response should:
-- Be brief and to the point
-- Sound natural and friendly
-- Ask for info casually
-- Give advice based only on the Loan Database
-- Use exact lender details from the database
-
-Student details: {student_details}
-Conversation so far:
-{conversation_history}
-
-Student's last message: {student_message}
-
-Your response (as Sarah):"""
-
-    def format(self, **kwargs) -> str:
-        kwargs["tool_names"] = ", ".join([tool.name for tool in tools])
-        lenders_data = format_lenders_data(loan_db.lenders)
-        return self.template.format(lenders_data=lenders_data, **kwargs)
-class CounselorOutputParser(AgentOutputParser):
-    def parse(self, llm_output: str) -> Union[AgentAction, AgentFinish]:
-        if "Response:" in llm_output:
-            return AgentFinish(
-                return_values={"output": llm_output.split("Response:")[-1].strip()},
-                log=llm_output,
-            )
-
-        regex = r"Action: (.*?)[\n]*Action Input: (.*)"
-        match = re.search(regex, llm_output, re.DOTALL)
-        if not match:
-            return AgentFinish(
-                return_values={"output": llm_output.strip()},
-                log=llm_output,
-            )
-        action = match.group(1).strip()
-        action_input = match.group(2).strip()
-        return AgentAction(tool=action, tool_input=action_input, log=llm_output)
-
-class EducationLoanCounselorBot:
-    def __init__(self):
-        self.llm = ChatOpenAI(model_name="gpt-4o", temperature=0.7)
-        self.prompt = CounselorPromptTemplate(input_variables=["student_details", "conversation_history", "student_message"])
-        self.output_parser = CounselorOutputParser()
-        self.counselor_chain = LLMChain(llm=self.llm, prompt=self.prompt)
-        self.agent = LLMSingleActionAgent(
-            llm_chain=self.counselor_chain,
-            output_parser=self.output_parser,
-            stop=["\nStudent:"],
-            allowed_tools=[tool.name for tool in tools]
+def get_cached_response(message: str, user_id: str, student_details: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Retrieve cached response from the counselor if available.
+    
+    Args:
+        message (str): User's message
+        user_id (str): Unique identifier for the user
+        student_details (Dict): Student information
+        
+    Returns:
+        Dict[str, Any]: Cached response if available, None otherwise
+    """
+    try:
+        return counselor.get_loan_recommendation(
+            student_message=message,
+            user_id=user_id,
+            student_details=student_details
         )
-        self.executor = AgentExecutor.from_agent_and_tools(agent=self.agent, tools=tools, verbose=True)
-        self.conversation_history = ""
-        self.student_details = ""
+    except Exception:
+        return None
 
-    def get_response(self, user_input):
-        if not self.student_details:
-            self.student_details = user_input
-        response = self.executor.run(
-            student_details=self.student_details,
-            conversation_history=self.conversation_history,
-            student_message=user_input
-        )
-        self.conversation_history += f"Student: {user_input}\nSarah: {response}\n"
-        return response
+def handle_chat_request(data: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
+    """
+    Process chat requests and generate appropriate responses.
+    
+    Args:
+        data (Dict[str, Any]): Request data containing message and student details
+        
+    Returns:
+        Tuple[Dict[str, Any], int]: Response data and HTTP status code
+    """
+    error_response, status_code = validate_request_data(data)
+    if error_response:
+        return error_response, status_code
 
-def main():
-    st.set_page_config(page_title="Education Loan Counselor", page_icon="💼", layout="wide")
-    st.title("Education Loan Counselor ChatBot")
+    message = data['message']
+    user_id = data['userId']
+    student_details = data['student_details']
+    student_details['userId'] = user_id
 
-    # Initialize session state
-    if "bot" not in st.session_state:
-        st.session_state.bot = EducationLoanCounselorBot()
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+    if message.lower() == 'reset':
+        counselor.reset_conversation(user_id)
+        return {'response': 'Conversation reset successfully'}, HTTPStatus.OK
 
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
+    # Use cached response if available
+    response = get_cached_response(message, user_id, student_details)
+    if not response:
+        try:
+            future = executor.submit(
+                counselor.get_loan_recommendation,
+                student_details,
+                message,
+                user_id
+            )
+            response = future.result(timeout=30)
+        except TimeoutError:
+            return {'error': 'Request timed out'}, HTTPStatus.REQUEST_TIMEOUT
+        except Exception as e:
+            return {'error': f'Error getting recommendation: {str(e)}'}, HTTPStatus.INTERNAL_SERVER_ERROR
+            
+    return {'response': response}, HTTPStatus.OK
 
-    # Chat input
-    if prompt := st.chat_input("Type your message here..."):
-        # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.write(prompt)
+@traceable(project_name="loan-counselor-agent")
+@app.route('/chat', methods=['POST'])
+def chat() -> Response:
+    """
+    API endpoint for chatting with the loan counselor.
+    Handles incoming chat requests and returns counselor responses.
+    
+    Returns:
+        Response: JSON response containing counselor's message or error
+    """
+    try:
+        response, status_code = handle_chat_request(request.json)
+        return jsonify(response), status_code
+    except Exception as e:
+        return jsonify({
+            'error': f'Internal server error: {str(e)}'
+        }), HTTPStatus.INTERNAL_SERVER_ERROR
 
-        # Generate and display assistant response
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                response = st.session_state.bot.get_response(prompt)
-                st.write(response)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+@app.route('/reset', methods=['POST']) 
+def reset_memory() -> Response:
+    """
+    API endpoint for clearing conversation memory for users.
+    Allows users to start fresh conversations with the counselor.
+    
+    Returns:
+        Response: JSON response indicating success or error
+    """
+    try:
+        data = request.json
+        if not data or 'userId' not in data:
+            return jsonify({'error': 'Missing userId in request'}), HTTPStatus.BAD_REQUEST
 
-    # Sidebar with instructions
-    st.sidebar.title("Instructions")
-    st.sidebar.write("""
-    1. Start by providing your details (name, age, nationality, degree, university, GPA, and study plans).
-    2. Ask questions about education loans or seek advice.
-    3. The AI counselor, Sarah, will assist you in finding the best loan options.
-    4. Continue the conversation until you have all the information you need.
-    """)
+        counselor.reset_conversation(data['userId'])
+        return jsonify({'message': 'Conversation history cleared successfully'})
+    except Exception as e:
+        return jsonify({
+            'error': f'Error clearing conversation histories: {str(e)}'
+        }), HTTPStatus.INTERNAL_SERVER_ERROR
+
+@app.route('/user-report', methods=['POST'])
+def user_report() -> Response:
+    """
+    API endpoint for getting user conversation reports.
+    
+    Returns:
+        Response: JSON response containing user report or error
+    """
+    try:
+        if not request.json or 'userId' not in request.json:
+            return jsonify({'error': 'Missing userId in request'}), HTTPStatus.BAD_REQUEST
+            
+        response = counselor.get_user_report(request.json['userId'])
+        return jsonify(response), HTTPStatus.OK
+    except Exception as e:
+        return jsonify({
+            'error': f'Error getting user report: {str(e)}'
+        }), HTTPStatus.INTERNAL_SERVER_ERROR
+
+@app.errorhandler(404)
+def not_found() -> Tuple[Response, int]:
+    """
+    Handle 404 Not Found errors.
+    Returns a JSON response for invalid routes.
+    """
+    return jsonify({'error': 'Not found'}), HTTPStatus.NOT_FOUND
+
+@app.errorhandler(500)
+def internal_error() -> Tuple[Response, int]:
+    """
+    Handle 500 Internal Server errors.
+    Returns a JSON response for server-side errors.
+    """
+    return jsonify({'error': 'Internal server error'}), HTTPStatus.INTERNAL_SERVER_ERROR
 
 if __name__ == "__main__":
-    main()
+    # Run Flask app
+    app.run(
+        host=app.config['HOST'],
+        port=app.config['PORT'],
+        debug=app.config['DEBUG']
+    )
