@@ -15,3 +15,6 @@ langchain-openai
 Flask-WTF
 streamlit
 langchain-google-genai
+SpeechRecognition
+gtts
+pyttsx3

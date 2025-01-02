@@ -1,19 +1,34 @@
 import streamlit as st
 import requests
+import speech_recognition as sr
+import pyttsx3
+import os
+from io import BytesIO
+import base64
+import tempfile
 
-# Configure page layout and style
+def text_to_speech(text):
+    engine = pyttsx3.init()
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
+        engine.save_to_file(text, fp.name)
+        try:
+            engine.runAndWait()
+        except RuntimeError:
+            pass  # Ignore the 'run loop already started' error
+        with open(fp.name, 'rb') as audio_file:
+            audio_bytes = audio_file.read()
+        os.unlink(fp.name)
+        return base64.b64encode(audio_bytes).decode()
+
 st.set_page_config(
     page_title="Student Loan Counselor",
     page_icon="🎓",
     layout="wide"
 )
 
-# Custom CSS for better styling
 st.markdown("""
     <style>
-    .main {
-        padding: 2rem;
-    }
+    .main { padding: 2rem; }
     .stButton button {
         width: 100%;
         border-radius: 5px;
@@ -21,9 +36,7 @@ st.markdown("""
         background-color: #4CAF50;
         color: white;
     }
-    .stTextInput > div > div > input {
-        border-radius: 5px;
-    }
+    .stTextInput > div > div > input { border-radius: 5px; }
     .response-box {
         border: 2px solid #4CAF50;
         border-radius: 10px;
@@ -37,17 +50,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Header section with title and description
 st.title("🎓 Student Loan Counselor AI")
-st.markdown("""
-    Your AI-powered assistant for navigating international student loans.
-    Get personalized guidance and recommendations for your education financing journey.
-""")
+st.markdown("Your AI-powered assistant for navigating international student loans.")
 
-# Layout with two sections
 col1, col2 = st.columns([1, 2])
 
-# User Information
 with col1:
     st.markdown("## 👤 User Information")
     user_id = st.text_input("User ID", placeholder="Enter your unique ID")
@@ -61,14 +68,55 @@ with col1:
         "course_of_study": st.text_input("Course of Study", placeholder="Your intended program")
     }
 
-# Chat Interface
 with col2:
     st.markdown("## 💬 Chat Interface")
-    message = st.text_area("Your Message", placeholder="Type your message here...", height=150)
+    
+    if st.button("🎤 Record Voice Message"):
+        recognizer = sr.Recognizer()
+        try:
+            with sr.Microphone() as source:
+                st.info("Recording...")
+                audio_data = recognizer.listen(source)
+                st.info("Processing...")
+                try:
+                    message = recognizer.recognize_google(audio_data)
+                    st.success(f"Recognized Message: {message}")
+                    try:
+                        response = requests.post(
+                            "http://localhost:8000/chat",
+                            json={
+                                "userId": user_id,
+                                "message": message,
+                                "student_details": student_details
+                            }
+                        ).json()
+                        
+                        if 'response' in response:
+                            st.markdown("### 🤖 AI Response:")
+                            st.markdown(
+                                f"<div class='response-box'>{response['response']['response']}</div>",
+                                unsafe_allow_html=True
+                            )
+                            audio_base64 = text_to_speech(response['response']['response'])
+                            st.markdown(
+                                f'<audio controls><source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3"></audio>',
+                                unsafe_allow_html=True
+                            )
+                    except requests.RequestException as e:
+                        st.error(f"Connection error: {str(e)}")
+
+                except sr.UnknownValueError:
+                    st.error("Could not understand the audio")
+                except sr.RequestError:
+                    st.error("Could not request results")
+        except AttributeError:
+            st.error("PyAudio is not installed")
+    else:
+        message = st.text_area("Your Message", placeholder="Type your message here...", height=150)
 
     if st.button("📤 Send Message"):
         if user_id and message:
-            with st.spinner('Processing your message...'):
+            with st.spinner('Processing...'):
                 try:
                     response = requests.post(
                         "http://localhost:8000/chat",
@@ -77,70 +125,58 @@ with col2:
                             "message": message,
                             "student_details": student_details
                         }
-                    )
-                    response.raise_for_status()
-
-                    data = response.json()
-                    print(data)
-                    if 'response' in data:
+                    ).json()
+                    
+                    if 'response' in response:
                         st.markdown("### 🤖 AI Response:")
-                        # Create the big box for the response
                         st.markdown(
-                            f"<div class='response-box'>{data['response']['response']}</div>",
+                            f"<div class='response-box'>{response['response']['response']}</div>",
                             unsafe_allow_html=True
                         )
-                    else:
-                        st.error(data.get('error', 'An unknown error occurred'))
+                        
+                        audio_base64 = text_to_speech(response['response']['response'])
+                        st.markdown(
+                            f'<audio controls><source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3"></audio>',
+                            unsafe_allow_html=True
+                        )
                 except requests.RequestException as e:
-                    st.error(f"🚫 Connection error: {str(e)}")
+                    st.error(f"Connection error: {str(e)}")
         else:
-            st.warning("⚠️ Please provide both User ID and Message.")
+            st.warning("Please provide User ID and Message")
 
-    # Buttons for resetting chat and generating report
-    col_reset, col_report = st.columns([1, 1])
+    col_reset, col_report = st.columns(2)
 
     with col_reset:
-        if st.button("🔄 Reset Chat"):
+        if st.button("🔄 Reset"):
             if user_id:
-                with st.spinner('Resetting conversation...'):
-                    try:
-                        response = requests.post(
-                            "http://localhost:8000/reset",
-                            json={"userId": user_id}
-                        )
-                        response.raise_for_status()
-                        data = response.json()
-                        if 'message' in data:
-                            st.success("✅ " + data['message'])
-                        else:
-                            st.error(data.get('error', 'An unknown error occurred'))
-                    except requests.RequestException as e:
-                        st.error(f"🚫 Connection error: {str(e)}")
+                try:
+                    response = requests.post(
+                        "http://localhost:8000/reset",
+                        json={"userId": user_id}
+                    ).json()
+                    if 'message' in response:
+                        st.success(response['message'])
+                except requests.RequestException as e:
+                    st.error(f"Connection error: {str(e)}")
             else:
-                st.warning("⚠️ Please provide User ID to reset conversation.")
+                st.warning("Please provide User ID")
 
     with col_report:
-        if st.button("📊 Generate Report"):
+        if st.button("📊 Report"):
             if user_id:
-                with st.spinner('Generating report...'):
-                    try:
-                        response = requests.post(
-                            "http://localhost:8000/user-report",
-                            json={"userId": user_id}
-                        )
-                        response.raise_for_status()
-                        report_data = response.json()
-
-                        if 'error' not in report_data:
-                            st.markdown("### 📈 Conversation Analysis")
-                            st.metric("Total Messages", report_data['conversation_length'])
-                            sentiment = report_data['sentiment_analysis']
-                            st.write(sentiment)
-                            st.markdown("#### 📝 Summary")
-                            st.info(report_data['user_summary'])
-                        else:
-                            st.error(report_data['error'])
-                    except requests.RequestException as e:
-                        st.error(f"🚫 Connection error: {str(e)}")
+                try:
+                    report = requests.post(
+                        "http://localhost:8000/user-report",
+                        json={"userId": user_id}
+                    ).json()
+                    
+                    if 'error' not in report:
+                        st.markdown("### 📈 Analysis")
+                        st.metric("Messages", report['conversation_length'])
+                        st.write(report['sentiment_analysis'])
+                        st.markdown("#### 📝 Summary")
+                        st.info(report['user_summary'])
+                except requests.RequestException as e:
+                    st.error(f"Connection error: {str(e)}")
             else:
-                st.warning("⚠️ Please provide User ID to generate report.")
+                st.warning("Please provide User ID")
